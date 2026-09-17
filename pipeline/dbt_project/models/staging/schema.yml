@@ -1,0 +1,48 @@
+version: 2
+
+models:
+  - name: stg_transactions
+    description: Type-cleaned financial transaction events, one row per transaction_id.
+    columns:
+      - name: transaction_id
+        description: Primary key, UUID assigned by the producer.
+        data_tests:
+          - unique
+          - not_null
+      - name: account_id
+        data_tests:
+          - not_null
+      - name: event_time
+        data_tests:
+          - not_null
+      - name: amount
+        data_tests:
+          - not_null
+      - name: category
+        data_tests:
+          - not_null
+          - accepted_values:
+              values:
+                - groceries
+                - dining
+                - travel
+                - electronics
+                - utilities
+                - entertainment
+                - healthcare
+                - fuel
+                - subscription
+                - cash_withdrawal
+
+  - name: stg_account_activity_windows
+    description: Cleaned per-account, 1-minute windowed aggregates.
+    columns:
+      - name: account_id
+        data_tests:
+          - not_null
+      - name: window_start
+        data_tests:
+          - not_null
+      - name: txn_count
+        data_tests:
+          - not_null

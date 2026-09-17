@@ -1,0 +1,230 @@
+name: findata-pipeline
+
+networks:
+  findata-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  kafka-data:
+  spark-ivy-cache:
+  spark-checkpoints:
+  airflow-logs:
+
+# Shared by streaming-job (continuous) and streaming-job-batch (one-shot).
+# Anchored rather than duplicated so the two can't drift apart - notably the
+# --packages versions, where a mismatch would mean the batch job silently
+# resolving different jars than the live one.
+x-spark-common: &spark-common
+  image: apache/spark:3.5.1
+  user: root
+  env_file: .env
+  working_dir: /opt/spark_jobs
+  volumes:
+    - ./pipeline/spark_jobs:/opt/spark_jobs
+    # user: root means HOME=/root, so Ivy actually resolves its cache to
+    # /root/.ivy2, not /opt/spark/.ivy2 - mounting it there was a no-op;
+    # jars were re-downloading via --packages on every container recreate.
+    - spark-ivy-cache:/root/.ivy2
+    # checkpoints previously lived in the container's /tmp, so `down`/`up`
+    # silently dropped Kafka offset tracking and processing state. Shared
+    # between both services; they write to separate subdirectories keyed by
+    # SPARK_TRIGGER_MODE, so their offsets never collide.
+    - spark-checkpoints:/tmp/checkpoints
+  networks:
+    - findata-net
+  depends_on:
+    kafka:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+  command: >
+    /opt/spark/bin/spark-submit
+    --master local[*]
+    --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.postgresql:postgresql:42.7.3
+    /opt/spark_jobs/streaming_job.py
+
+# Shared by the three Airflow services (init, scheduler, webserver).
+x-airflow-common: &airflow-common
+  build: ./airflow
+  env_file: .env          # supplies POSTGRES_* for dbt's profiles.yml
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./pipeline/dbt_project:/opt/airflow/dbt_project
+    - airflow-logs:/opt/airflow/logs
+  networks:
+    - findata-net
+
+services:
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: findata-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      # PLAINTEXT (kafka:9092) is what containers on findata-net use
+      # (producer, streaming-job) - unchanged from before. EXTERNAL
+      # (localhost:29092) is new: it's what a client running on the host
+      # machine (outside Docker) should connect to. The old setup only
+      # advertised kafka:9092, which a host client can publish to :9092 on
+      # (the port mapping works) but then can't resolve once Kafka tells it
+      # to actually talk to "kafka:9092" for produce/consume.
+      KAFKA_LISTENERS: PLAINTEXT://:9092,EXTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+    volumes:
+      # /tmp/kafka-logs, NOT /tmp/kraft-combined-logs: this image runs with
+      # /opt/kafka/config/server.properties, whose log.dirs is /tmp/kafka-logs
+      # (the kraft/*.properties files that say otherwise are unused). Mounted
+      # at the wrong path, the volume was a no-op and Kafka's log lived in the
+      # container's writable layer - so every container recreate silently reset
+      # the topic to offset 0 and broke Spark's checkpointed offsets.
+      - kafka-data:/tmp/kafka-logs
+    networks:
+      - findata-net
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  postgres:
+    image: postgres:16
+    container_name: findata-postgres
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./pipeline/postgres_init:/docker-entrypoint-initdb.d
+    networks:
+      - findata-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  adminer:
+    image: adminer
+    container_name: findata-adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    networks:
+      - findata-net
+    depends_on:
+      - postgres
+
+  producer:
+    build: ./pipeline/producer
+    container_name: findata-producer
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - findata-net
+
+  streaming-job:
+    <<: *spark-common
+    container_name: findata-streaming-job
+    restart: unless-stopped
+
+  producer-batch:
+    build: ./pipeline/producer
+    container_name: findata-producer-batch
+    profiles: ["tools"]  # excluded from `up`; run on demand via `docker compose run --rm producer-batch`
+    env_file: .env
+    environment:
+      PRODUCER_MODE: batch
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - findata-net
+
+  streaming-job-batch:
+    <<: *spark-common
+    container_name: findata-streaming-job-batch
+    profiles: ["tools"]  # excluded from `up`; run on demand via `docker compose run --rm streaming-job-batch`
+    environment:
+      SPARK_TRIGGER_MODE: batch
+
+  dbt:
+    image: ghcr.io/dbt-labs/dbt-postgres:1.8.latest
+    container_name: findata-dbt
+    profiles: ["tools"]  # excluded from `up`; run on demand via `docker compose run --rm dbt <args>`
+    env_file: .env
+    volumes:
+      - ./pipeline/dbt_project:/usr/app/dbt_project
+    working_dir: /usr/app/dbt_project
+    networks:
+      - findata-net
+    entrypoint: ["dbt"]
+    command: ["build", "--profiles-dir", "."]
+
+  # --- Airflow: schedules the dbt rebuild (see airflow/dags/) -------------
+  # Runs the DB migration and creates the admin user, then exits. The
+  # scheduler and webserver wait for it to complete successfully.
+  airflow-init:
+    <<: *airflow-common
+    container_name: findata-airflow-init
+    entrypoint: /bin/bash
+    # Braces matter: `migrate && { create || true; }` tolerates the user
+    # already existing on a re-run, without also swallowing a migration
+    # failure the way `migrate && create || true` would.
+    command:
+      - -c
+      - >
+        airflow db migrate &&
+        { airflow users create
+        --username "$${AIRFLOW_ADMIN_USER}"
+        --password "$${AIRFLOW_ADMIN_PASSWORD}"
+        --firstname Admin --lastname User --role Admin
+        --email admin@example.com || true; }
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: findata-airflow-scheduler
+    restart: unless-stopped
+    command: scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: findata-airflow-webserver
+    restart: unless-stopped
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully

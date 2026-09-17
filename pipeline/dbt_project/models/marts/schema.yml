@@ -1,0 +1,34 @@
+version: 2
+
+models:
+  - name: dim_accounts
+    description: One row per account, with lifetime transaction stats.
+    columns:
+      - name: account_id
+        data_tests:
+          - unique
+          - not_null
+
+  - name: fct_transactions
+    description: BI-ready fact table of individual transactions.
+    columns:
+      - name: transaction_id
+        data_tests:
+          - unique
+          - not_null
+      - name: account_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_accounts')
+              field: account_id
+
+  - name: agg_account_activity_daily
+    description: Daily rollup of per-minute velocity/avg-transaction-size windows, one row per account per day.
+    columns:
+      - name: account_id
+        data_tests:
+          - not_null
+      - name: activity_date
+        data_tests:
+          - not_null

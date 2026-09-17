@@ -1,0 +1,29 @@
+# secrets
+.env
+
+# personal notes (kept out of the repo deliberately)
+notes.md
+
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# dbt build output
+pipeline/dbt_project/target/
+pipeline/dbt_project/logs/
+pipeline/dbt_project/dbt_packages/
+pipeline/dbt_project/.user.yml
+
+# pipeline doctor runtime state
+pipeline_doctor/checkpoints/
+pipeline_doctor/data/outputs/
+pipeline_doctor/data/baselines/
+*.sqlite
+*.sqlite3
+
+# misc
+.tmp/
+.DS_Store

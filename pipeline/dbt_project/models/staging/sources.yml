@@ -1,0 +1,27 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: Landing tables written directly by the Spark Structured Streaming job.
+    # Default freshness for both tables below (each keeps its own
+    # loaded_at_field). loaded_at_field alone did nothing without this block
+    # attached - it was declared but unused before. With it, `dbt source
+    # freshness` becomes the one test in this project that can actually
+    # fail: it catches the continuous streaming job being down, which every
+    # other test here can't (see schema.yml comments) since they're backed
+    # by DB constraints or trivially true by construction.
+    #
+    # Thresholds assume the continuous job (10s trigger) is running - a
+    # warning at 5 min / error at 15 min gives generous slack for a manual
+    # restart before erroring, while still catching a genuinely dead job.
+    freshness:
+      warn_after: {count: 5, period: minute}
+      error_after: {count: 15, period: minute}
+    tables:
+      - name: transactions
+        loaded_at_field: ingested_at
+        description: One row per raw financial transaction event consumed from Kafka.
+      - name: account_activity_windows
+        loaded_at_field: computed_at
+        description: Per-account, 1-minute tumbling window aggregates (velocity, avg transaction size) computed by Spark.
