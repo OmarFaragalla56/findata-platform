@@ -277,6 +277,12 @@ TASK 1: dbt source freshness
      └── YES ─► TASK 2: dbt build
                   staging views ─► mart tables ─► 19 tests
                   │
+                  └─► TASK 3: pipeline_doctor_check
+                        profile the rebuilt mart, compare to the baseline
+                        │
+                        ├── looks normal ──► task green
+                        └── drift needing review ──► exit 2 ──► task red
+                  │
                   └─► results in the `airflow` database, visible at localhost:8080
 ```
 
@@ -473,7 +479,7 @@ volumes:
 | Volume | Mounted at | Holds | Lose it and... |
 |---|---|---|---|
 | `postgres-data` | `/var/lib/postgresql/data` | All raw data, marts, the Airflow DB | Everything is gone; init SQL runs again |
-| `kafka-data` | `/tmp/kraft-combined-logs` | Every message in the topic | Nothing can be replayed |
+| `kafka-data` | `/tmp/kafka-logs` | Every message in the topic | Nothing can be replayed |
 | `spark-checkpoints` | `/tmp/checkpoints` | Offsets + open window state | Spark restarts from `latest` and skips data |
 | `spark-ivy-cache` | `/root/.ivy2` | Downloaded jars | Only slower startup (jars download again) |
 | `airflow-logs` | `/opt/airflow/logs` | Task logs | Log history |
@@ -571,7 +577,7 @@ kafka:
     KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
     KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
   volumes:
-    - kafka-data:/tmp/kraft-combined-logs
+    - kafka-data:/tmp/kafka-logs
   healthcheck:
     test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
     interval: 10s
@@ -2353,7 +2359,7 @@ with DAG(
         bash_command=f"cd {DBT_PROJECT_DIR} && {DBT_BIN} build --profiles-dir .",
     )
 
-    dbt_source_freshness >> dbt_build
+    dbt_source_freshness >> dbt_build >> pipeline_doctor_check
 ```
 
 | Line | Meaning |
@@ -2370,7 +2376,7 @@ with DAG(
 | `tags` | Labels for filtering in the UI |
 | `BashOperator(bash_command=...)` | Run a shell command. **The exit code decides the outcome**: 0 = success, anything else = failure. |
 | `cd ... && dbt ... --profiles-dir .` | Go to the project, then run dbt with the `profiles.yml` there |
-| `dbt_source_freshness >> dbt_build` | **The dependency:** freshness first, and build only if freshness succeeded |
+| `dbt_source_freshness >> dbt_build >> pipeline_doctor_check` | **The dependency chain:** freshness gates the build, and the drift check runs on what the build produced |
 
 **Why freshness gates the build:** if ingestion is dead, rebuilding would publish
 the same old numbers with a new build timestamp, and they'd look healthy.
@@ -2520,63 +2526,117 @@ which then means deciding where to restart reading from.
 
 ## 13. Pipeline Doctor integration
 
-**Pipeline Doctor** (`pipeline_doctor/`) is a separate project: a
-LangGraph-based tool that profiles a step's output, compares it to a saved
-baseline to detect **drift** (unusual changes in the data), and asks an LLM to
-judge the severity, with an optional human approval step.
+**Pipeline Doctor** (`pipeline_doctor/`) is the second half of this repo: a
+LangGraph agent that profiles data, compares it to a saved baseline, and pauses
+for a human when something looks wrong. It is a separate installable package,
+so it stays usable against pipelines other than this one.
 
-### What the experiment did
-
-Only **two files changed**, both in Pipeline Doctor; nothing in this project:
-
-1. **New:** `pipeline_doctor/pipelines/findata_mart_export.py`, a "step" that exports
-   a recent slice of the mart to CSV:
-
-   ```python
-   CONTAINER = "findata-postgres"
-   QUERY_TEMPLATE = """
-   select transaction_id, account_id, event_time, event_date, amount,
-          merchant, category, location, card_present, is_large_transaction
-   from analytics_marts.fct_transactions
-   where event_time >= (
-       select max(event_time) - interval '{minutes} minutes'
-       from analytics_marts.fct_transactions
-   )
-   """
-   ```
-
-   It runs `docker exec findata-postgres psql --csv -c <query>` and writes the output.
-   - The window is anchored to the mart's **own** `max(event_time)`, not `now()`, because the mart
-     trails live data by up to an hour, so "last 10 minutes from now" returned nothing.
-   - `--csv` without `-t -A`, because `-A` overrides `--csv` and produced pipe-delimited output.
-
-2. **Modified:** `pipeline_doctor/.gitignore`, to ignore `data/outputs/`.
-
-### What it showed
-
-- ✅ Drift detection works on real data: it passed two clean 10-minute windows (0.8% row
-  change vs a 20% threshold) and flagged a forced 79.8% row drop.
-- ⚠️ **`account_id` isn't checked for drift:** it has 25 distinct values, above the
-  hardcoded 20-value cutoff for categorical columns, and it's text, not numeric.
-- ⚠️ Baselines are large: a 2,958-row profile gave a 39.7 KB baseline (~1 MB for the full mart).
-- ⚠️ `triage` / `self_heal` **fail without `ANTHROPIC_API_KEY`**.
-- **Pipeline Doctor never ran or touched the Airflow DAG.** It only ran a read-only
-  `SELECT`. Airflow didn't know it existed.
-
-### The decision: Option C
+### What each layer actually checks
 
 ```
-dbt_source_freshness  ─►  dbt_build  ─►  pipeline_doctor_check
- "is data arriving?"      "is each row     "does the data look
-                            valid?"          like normal data?"
+dbt source freshness  ──►  dbt build  ──►  pipeline_doctor_check
+ "is data arriving?"       "is each row     "does this data look like
+                             valid?"          normal data?"
 ```
 
-Airflow keeps scheduling; Pipeline Doctor becomes a **quality check** after the build.
-The full roadmap (merge the repos, schema drift, Postgres/Parquet readers,
-bounded profiles, per-column config, LLM optional, operability) is in
-`pipeline_doctor/plan.md`.
+None of them substitutes for another. A mart can be fresh, pass all 19 tests,
+and still have lost half its rows or had a column change type.
 
----
+### How it reads the mart
+
+Directly, over Postgres:
+
+```bash
+pipeline-doctor check --source postgres \
+  --table analytics_marts.fct_transactions \
+  --name findata_fct_transactions --limit 5000
+```
+
+That is the whole integration. There is no export script and no CSV: an earlier
+version shelled out to `docker exec findata-postgres psql --csv`, which also
+meant it could only run somewhere with a Docker socket — ruling out the Airflow
+container it now runs in.
+
+Reading Postgres directly also makes the types **declared** rather than
+guessed: `varchar`, `timestamp`, `numeric`. Over CSV, pandas infers types, so a
+column that happens to be all-null in one run reads as `float64` and looks like
+a type change when nothing changed.
+
+### What it checks for
+
+| Flag kind | Catches |
+|---|---|
+| `schema_column_removed` | A column that was in the baseline is gone |
+| `schema_column_added` | A new column appeared |
+| `schema_dtype_changed` | Same column, different type |
+| `row_count` | Total rows moved more than the threshold |
+| `null_rate` | A column's null rate moved |
+| `categorical` | A category distribution shifted (chi-square) |
+| `numeric` | A value distribution shifted (two-sample KS) |
+
+A removed or retyped column goes to a human **regardless of severity**: value
+distributions can legitimately shift, a column that stopped existing cannot.
+
+### Per-column config
+
+`pipeline_doctor/data/configs/findata_fct_transactions.json` overrides the
+role-inference heuristic for this mart:
+
+```json
+{
+  "categorical": ["account_id", "category", "card_present", "is_large_transaction"],
+  "numeric": ["amount"],
+  "ignore": ["merchant", "location", "transaction_id"]
+}
+```
+
+Why it's needed: role inference uses a hardcoded "≤ 20 distinct values" cut for
+categorical columns. `account_id` has 25 and is a string, so it was neither
+categorical nor numeric — **the dimension this whole pipeline is about was
+excluded from drift testing**. `merchant` and `location` go the other way: the
+producer generates a fresh Faker value per row, so they are near-unique by
+construction and testing their frequencies is pure noise.
+
+### Where its memory lives
+
+| Path in the Airflow container | Volume | Holds |
+|---|---|---|
+| `/opt/pipeline_doctor/data/baselines` | `pd-baselines` | What "normal" looks like |
+| `/opt/pipeline_doctor/data/runs` | `pd-runs` | One JSONL report per run |
+| `/opt/pipeline_doctor/checkpoints` | `pd-checkpoints` | Paused runs awaiting review |
+| `/opt/pipeline_doctor/data/configs` | bind mount, read-only | The config above |
+
+The volumes are not optional. Without them, every container recreate would
+re-bootstrap each baseline from the current run, so there would never be a
+prior state to compare against — it would report "no drift" forever and look
+healthy while checking nothing.
+
+### Exit codes, and the pending-review problem
+
+| Code | Meaning | Airflow task |
+|---|---|---|
+| 0 | Clean | green |
+| 2 | Drift awaiting human review | **red** |
+| 1 | Error, abort, or a human rejected the drift | red |
+
+A paused run used to exit 0, which as a task reads as success: the DAG would go
+green while a review sat unanswered forever. Clear a pending review with:
+
+```bash
+docker compose exec airflow-scheduler \
+  /home/airflow/pd_venv/bin/pipeline-doctor resume <thread_id> <approve|reject>
+```
+
+`approve` makes the observed data the new baseline; `reject` leaves the
+baseline alone. The `thread_id` is printed in the task log.
+
+### Why a third virtualenv
+
+`airflow/Dockerfile` now builds three Python environments: Airflow's own, one
+for dbt, and one for Pipeline Doctor. dbt conflicts with Airflow on
+jinja2/click; Pipeline Doctor brings langgraph, langchain and pydantic v2,
+which conflict in their own way. Three isolated environments is inelegant and
+much less fragile than making one resolver satisfy all three.
 
 ## 14. Known issues and open items
 
@@ -2593,12 +2653,14 @@ Also tracked in `notes.md`.
 | Index `idx_transactions_account_time` unused | `01_init.sql` | Low | Only helps ad-hoc queries |
 | No late events ever produced | `produce_transactions.py` | Realism | The watermark is never exercised |
 | Producer default `localhost:9092` out of date | `produce_transactions.py` | Low | From the host it's `localhost:29092`; doesn't matter inside Docker |
-| `pipeline/dbt_project/.user.yml` not gitignored | `.gitignore` | Before first commit | |
+| ~~`.user.yml` not gitignored~~ | `.gitignore` | **fixed** | covered by the merged root `.gitignore` |
 | Two dbt runners share `target/` | Compose mounts | Low | Overlapping runs could overwrite each other's artifacts |
 | Two dbt version pins must stay aligned | `airflow/Dockerfile` vs `dbt` service | Maintenance | |
-| No `.env.example` | repo root | Phase 0 | Needed before the repo is shared |
-| Not a git repo | repo root | Phase 0 | |
+| ~~No `.env.example`~~ | repo root | **fixed** | created in Phase 0, secrets placeholdered |
+| ~~Not a git repo~~ | repo root | **fixed** | `git init` + first commit |
 | Single Kafka partition, Spark `local[*]` | By design | Demo-scale | See the README's known limitations |
+| ~~`kafka-data` mounted where Kafka never writes~~ | `docker-compose.yml` | **fixed** | was `/tmp/kraft-combined-logs`, actually `/tmp/kafka-logs`; cost the topic's history to discover |
+| ~~Pipeline Doctor state volumes root-owned~~ | `airflow/Dockerfile` | **fixed** | dirs created + chowned in the image, so empty volumes inherit the ownership |
 
 ---
 

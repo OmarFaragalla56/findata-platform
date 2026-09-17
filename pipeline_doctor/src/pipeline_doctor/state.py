@@ -12,10 +12,16 @@ from typing import Literal, NotRequired, TypedDict
 
 
 class PipelineDoctorState(TypedDict):
-    # --- identity (M1) ---
-    step_path: str                     # filesystem path to the target pipeline step script
-    output_path: str                   # where the step's output CSV is written
+    # --- identity ---
+    # A run is either "run this step, then check the file it wrote" (step_path +
+    # output_path) or "check this source directly" (source). Both are optional
+    # because neither shape needs the other's fields; persistence.baseline_store
+    # .run_key() works out the baseline identity from whichever is present.
+    step_path: NotRequired[str]        # filesystem path to the target pipeline step script
+    output_path: NotRequired[str]      # where the step's output is written (CSV, historically)
     step_args: NotRequired[list[str]]  # extra CLI args passed through to the step (e.g. ["--scenario", "drift"])
+    source: NotRequired[dict]          # where to read data from: {"kind": "postgres"|"parquet"|"csv", ...}
+    name: NotRequired[str]             # explicit identity; overrides whatever run_key would derive
 
     # --- run_step / self_heal (M1-M3) ---
     status: Literal[

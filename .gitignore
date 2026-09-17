@@ -21,6 +21,9 @@ pipeline/dbt_project/.user.yml
 pipeline_doctor/checkpoints/
 pipeline_doctor/data/outputs/
 pipeline_doctor/data/baselines/
+pipeline_doctor/data/runs/
+# data/configs/ is deliberately NOT ignored: column config is source, reviewed
+# like code, not runtime state.
 *.sqlite
 *.sqlite3
 

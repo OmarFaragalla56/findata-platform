@@ -1,9 +1,12 @@
 """Assembles the StateGraph: nodes, conditional edges, and compilation with the
 SqliteSaver checkpointer.
 
-M7 (full) topology:
+Topology:
 
-    START -> run_step --(failed)--> self_heal --(status=="running")--> run_step
+    START --(step_path given)--> run_step
+      |--(source given, no step)--> quality_check
+
+    run_step --(failed)--> self_heal --(status=="running")--> run_step
                 |                        |--(status=="aborted")-----------|
                 |--(succeeded)--> quality_check --(no drift)--------------|
                                         |--(has_drift)--> triage          |
@@ -29,8 +32,21 @@ from pipeline_doctor.nodes.run_step import run_step
 from pipeline_doctor.nodes.self_heal import self_heal
 from pipeline_doctor.nodes.triage import triage
 from pipeline_doctor.state import PipelineDoctorState
+from pipeline_doctor.tools.diffing import has_structural_drift
 
 _SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+def route_entry(state: PipelineDoctorState) -> str:
+    """Run a step first, or go straight to checking a source.
+
+    A run that names a `source` has nothing to execute — an orchestrator
+    already produced the data and this is a check on the result. Forcing it
+    through run_step would mean inventing a script whose only purpose is to
+    copy the data somewhere Pipeline Doctor can read it, which is exactly the
+    wrapper that tools.readers removed.
+    """
+    return "run_step" if state.get("step_path") else "quality_check"
 
 
 def route_after_run_step(state: PipelineDoctorState) -> str:
@@ -46,6 +62,12 @@ def route_after_quality_check(state: PipelineDoctorState) -> str:
 
 
 def route_after_triage(state: PipelineDoctorState) -> str:
+    # Structural drift (a column removed or retyped) goes to a human whatever
+    # severity was assigned. Everything else in a profile describes values,
+    # which can legitimately shift; a column that stopped existing cannot, and
+    # whether someone is told about it shouldn't depend on a severity score.
+    if has_structural_drift(state.get("drift_report") or {}):
+        return "human_gate"
     severity = state["triage_result"]["severity"]
     threshold = get_settings().human_gate_min_severity
     return "human_gate" if _SEVERITY_ORDER[severity] >= _SEVERITY_ORDER[threshold] else "finalize"
@@ -62,7 +84,9 @@ def build_graph(checkpointer):
     builder.add_node("human_gate", human_gate)
     builder.add_node("finalize", finalize)
 
-    builder.add_edge(START, "run_step")
+    builder.add_conditional_edges(
+        START, route_entry, {"run_step": "run_step", "quality_check": "quality_check"}
+    )
     builder.add_conditional_edges(
         "run_step", route_after_run_step, {"self_heal": "self_heal", "quality_check": "quality_check"}
     )

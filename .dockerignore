@@ -1,0 +1,15 @@
+# The Airflow image builds from the repo root, so keep the context small:
+# without this every rebuild ships the venvs, git history and dbt artefacts
+# to the daemon.
+.git
+**/.venv
+**/__pycache__
+**/*.pyc
+pipeline/dbt_project/target
+pipeline/dbt_project/logs
+pipeline/dbt_project/dbt_packages
+pipeline_doctor/data
+pipeline_doctor/checkpoints
+pipeline_doctor/tests
+.env
+notes.md

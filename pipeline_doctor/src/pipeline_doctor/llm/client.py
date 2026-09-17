@@ -10,6 +10,8 @@ malformed-JSON case themselves.
 
 from __future__ import annotations
 
+import os
+
 from langchain_anthropic import ChatAnthropic
 
 from pipeline_doctor.config.settings import get_settings
@@ -22,3 +24,15 @@ def get_llm(schema):
     settings = get_settings()
     model = ChatAnthropic(model=settings.llm_model, temperature=0)
     return model.with_structured_output(schema)
+
+
+def llm_available() -> bool:
+    """Whether an LLM call can be made at all.
+
+    Nodes check this instead of letting ChatAnthropic raise. Without a key,
+    triage and self_heal used to fail the whole run — fine for a developer
+    running the CLI by hand, but this is meant to run unattended on a schedule,
+    where a missing or expired key should degrade the decision quality, not
+    take the pipeline's monitoring offline.
+    """
+    return bool(os.getenv("ANTHROPIC_API_KEY"))

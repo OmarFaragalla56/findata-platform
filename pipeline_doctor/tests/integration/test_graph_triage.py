@@ -56,5 +56,6 @@ def test_drift_routes_through_triage(tmp_path, monkeypatch):
     result = _invoke(tmp_path, "t2", ["--scenario", "drift", "--drift-kind", "all"], "out2.csv")
 
     assert result["status"] == "quality_flagged"
-    assert result["triage_result"] == {"severity": "medium", "explanation": "test explanation"}
+    assert result["triage_result"]["severity"] == "medium"
+    assert result["triage_result"]["explanation"] == "test explanation"
     stub.invoke.assert_called_once()

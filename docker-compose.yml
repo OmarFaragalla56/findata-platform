@@ -10,6 +10,14 @@ volumes:
   spark-ivy-cache:
   spark-checkpoints:
   airflow-logs:
+  # Pipeline Doctor's memory. Without these on volumes, every container
+  # recreate would re-bootstrap each baseline from the current run, so there
+  # would never be a prior state to compare against - PD would report "no
+  # drift" forever and look healthy while checking nothing. Same class of bug
+  # as the Spark checkpoint and Kafka log volumes.
+  pd-baselines:
+  pd-checkpoints:
+  pd-runs:
 
 # Shared by streaming-job (continuous) and streaming-job-batch (one-shot).
 # Anchored rather than duplicated so the two can't drift apart - notably the
@@ -46,7 +54,9 @@ x-spark-common: &spark-common
 
 # Shared by the three Airflow services (init, scheduler, webserver).
 x-airflow-common: &airflow-common
-  build: ./airflow
+  build:
+    context: .
+    dockerfile: airflow/Dockerfile
   env_file: .env          # supplies POSTGRES_* for dbt's profiles.yml
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -55,10 +65,22 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
     AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+    # Container paths for Pipeline Doctor's state (the repo-level defaults are
+    # relative, which is right for running it from a checkout and wrong here).
+    PIPELINE_DOCTOR_BASELINE_DIR: /opt/pipeline_doctor/data/baselines
+    PIPELINE_DOCTOR_RUN_REPORT_DIR: /opt/pipeline_doctor/data/runs
+    PIPELINE_DOCTOR_CHECKPOINT_DB: /opt/pipeline_doctor/checkpoints/pipeline_doctor.sqlite
+    PIPELINE_DOCTOR_COLUMN_CONFIG_DIR: /opt/pipeline_doctor/data/configs
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./pipeline/dbt_project:/opt/airflow/dbt_project
     - airflow-logs:/opt/airflow/logs
+    # Column config is source, not state: read-only from the repo, so editing
+    # it is a reviewable change rather than a container-local surprise.
+    - ./pipeline_doctor/data/configs:/opt/pipeline_doctor/data/configs:ro
+    - pd-baselines:/opt/pipeline_doctor/data/baselines
+    - pd-runs:/opt/pipeline_doctor/data/runs
+    - pd-checkpoints:/opt/pipeline_doctor/checkpoints
   networks:
     - findata-net
 

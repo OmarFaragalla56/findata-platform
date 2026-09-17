@@ -19,7 +19,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from pipeline_doctor.llm.client import get_llm
+from pipeline_doctor.llm.client import get_llm, llm_available
 from pipeline_doctor.llm.prompts import build_self_heal_prompt
 from pipeline_doctor.state import PipelineDoctorState
 
@@ -43,10 +43,27 @@ def self_heal(state: PipelineDoctorState) -> dict:
     if retry_count > max_retries:
         return {"retry_count": retry_count, "status": "aborted"}
 
+    if not llm_available():
+        # Fall back to the fixed retry-N policy this node originally replaced.
+        # Degrading to a dumber decision keeps an unattended run alive; raising
+        # here would turn a missing key into a failed pipeline.
+        return {
+            "retry_count": retry_count,
+            "status": "running",
+            "self_heal_decision": {
+                "action": "retry",
+                "reasoning": (
+                    f"No ANTHROPIC_API_KEY configured; using the fixed policy "
+                    f"(retry up to {max_retries} times, then abort)."
+                ),
+                "source": "rules",
+            },
+        }
+
     llm = get_llm(SelfHealDecision)
     decision: SelfHealDecision = llm.invoke(
         build_self_heal_prompt(
-            step_path=state["step_path"],
+            step_path=state.get("step_path", "<no step>"),
             error=state.get("error"),
             traceback=state.get("traceback"),
             retry_count=retry_count,

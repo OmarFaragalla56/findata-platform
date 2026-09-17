@@ -19,3 +19,10 @@ import pytest
 def isolated_data_dirs(tmp_path, monkeypatch):
     monkeypatch.setenv("PIPELINE_DOCTOR_BASELINE_DIR", str(tmp_path / "baselines"))
     monkeypatch.setenv("PIPELINE_DOCTOR_CHECKPOINT_DB", str(tmp_path / "checkpoints" / "test.sqlite"))
+    monkeypatch.setenv("PIPELINE_DOCTOR_COLUMN_CONFIG_DIR", str(tmp_path / "configs"))
+    monkeypatch.setenv("PIPELINE_DOCTOR_RUN_REPORT_DIR", str(tmp_path / "runs"))
+    # triage and self_heal skip the LLM entirely when no key is set, so tests
+    # that monkeypatch get_llm need a key present or their stub is never
+    # reached. The value is never used: the client itself is always stubbed in
+    # those tests, so no request is ever made.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-never-used")

@@ -6,9 +6,16 @@ there is no "when should this run" question for an orchestrator to answer, so
 Airflow does not touch it. The genuinely recurring work is the dbt rebuild,
 which was previously "remember to type `docker compose run --rm dbt build`".
 
-Two tasks, in order:
+Three tasks, in order:
   1. dbt source freshness - fails if the streaming job has stopped landing rows
   2. dbt build            - rebuild staging + marts, then run the data tests
+  3. pipeline_doctor_check - does the rebuilt mart *look* like normal data?
+
+Each answers a different question, and none of them substitutes for another:
+freshness asks whether data is still arriving, dbt's tests ask whether each row
+is valid, and Pipeline Doctor asks whether the shape and distribution of the
+data has changed. A mart can be fresh and pass every test while half its rows
+have vanished or a column has quietly changed type.
 
 Freshness gates the build on purpose. If ingestion is dead, rebuilding the
 marts would republish the same stale numbers under a fresh build timestamp,
@@ -28,6 +35,18 @@ from airflow.operators.bash import BashOperator
 # dependency conflicts with Airflow itself, so it must be called by path.
 DBT_BIN = "/home/airflow/dbt_venv/bin/dbt"
 DBT_PROJECT_DIR = "/opt/airflow/dbt_project"
+
+# Pipeline Doctor lives in a third venv for the same dependency-isolation
+# reason dbt has its own (see airflow/Dockerfile), so it is also called by path.
+PD_BIN = "/home/airflow/pd_venv/bin/pipeline-doctor"
+PD_TABLE = "analytics_marts.fct_transactions"
+# Explicit and stable: the baseline is filed under this name, so changing it
+# silently starts comparing against nothing.
+PD_NAME = "findata_fct_transactions"
+# A bounded slice, not the whole mart: profiles carry a sample of each numeric
+# column, and the interesting question is "does recent data look normal", not
+# "has the cumulative total grown" (it always has).
+PD_ROW_LIMIT = 5000
 
 with DAG(
     dag_id="findata_dbt_build",
@@ -57,4 +76,18 @@ with DAG(
         bash_command=f"cd {DBT_PROJECT_DIR} && {DBT_BIN} build --profiles-dir .",
     )
 
-    dbt_source_freshness >> dbt_build
+    # Exit codes: 0 clean, 2 drift is awaiting human review, 1 error. Anything
+    # non-zero fails the task, which is the point - a pending review should be
+    # visible as a red task rather than passing silently. Clear it with
+    #   docker compose exec airflow-scheduler \
+    #     /home/airflow/pd_venv/bin/pipeline-doctor resume <thread_id> <approve|reject>
+    # using the thread_id printed in this task's log.
+    pipeline_doctor_check = BashOperator(
+        task_id="pipeline_doctor_check",
+        bash_command=(
+            f"{PD_BIN} check --source postgres "
+            f"--table {PD_TABLE} --name {PD_NAME} --limit {PD_ROW_LIMIT}"
+        ),
+    )
+
+    dbt_source_freshness >> dbt_build >> pipeline_doctor_check

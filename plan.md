@@ -8,6 +8,24 @@ pipeline as a one-off experiment (see "What the experiment established" below).
 
 ---
 
+## Status: all phases delivered (2026-09-17)
+
+| Phase | State | Evidence |
+|---|---|---|
+| 0 — combine the repos | done | one stack from `findata-platform/`; volumes reattached with data intact |
+| 2 — read from somewhere other than CSV | done | `tools/readers/` (postgres, parquet, csv); export adapter deleted |
+| 1 — schema drift | done | 3 new flag kinds; a dropped column caught end-to-end against the live mart |
+| 3 — bounded profiles | done | deterministic capped sample + `numeric_meta` |
+| 4 — per-column config | done | `data/configs/findata_fct_transactions.json` forces `account_id` categorical |
+| 5 — make the LLM optional | done | rule-based triage/self-heal; verified with no API key |
+| 6 — operability | done | run reports, step timeout, README, `docs/architecture.md` |
+| Option C wiring | done | `dbt_source_freshness >> dbt_build >> pipeline_doctor_check`, all green |
+
+84 tests pass. The sections below are the original plan, kept as the record of
+what was decided and why.
+
+---
+
 ## The decision
 
 **Option C: Airflow orchestrates, Pipeline Doctor gates.**

@@ -17,19 +17,20 @@ from __future__ import annotations
 
 from langgraph.types import interrupt
 
-from pipeline_doctor.persistence.baseline_store import save_baseline
+from pipeline_doctor.persistence.baseline_store import run_key, save_baseline
 from pipeline_doctor.state import PipelineDoctorState
 
 
 def human_gate(state: PipelineDoctorState) -> dict:
+    key = run_key(state)
     decision = interrupt({
-        "step_path": state["step_path"],
+        "step_path": state.get("step_path") or key,
         "drift_report": state["drift_report"],
         "triage_result": state["triage_result"],
     })
 
     if decision == "approve":
-        save_baseline(state["step_path"], state["data_profile"])
+        save_baseline(key, state["data_profile"])
         return {"human_decision": "approve", "status": "approved"}
 
     return {"human_decision": "reject", "status": "rejected"}

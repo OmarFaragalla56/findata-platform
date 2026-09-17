@@ -1,0 +1,6 @@
+{
+  "_comment": "Per-column config for the findata marts. account_id is forced to categorical: it has 25 distinct values, one over infer_column_roles' hardcoded cut of 20, and it is a string so it isn't numeric either - so the heuristic dropped the pipeline's key dimension from drift testing entirely. merchant and location are ignored: the producer generates a fresh Faker value per row, so they are near-unique by construction and a frequency test on them is noise.",
+  "categorical": ["account_id", "category", "card_present", "is_large_transaction"],
+  "numeric": ["amount"],
+  "ignore": ["merchant", "location", "transaction_id"]
+}

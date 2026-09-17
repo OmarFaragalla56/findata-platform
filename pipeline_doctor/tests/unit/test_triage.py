@@ -26,5 +26,7 @@ def test_triage_returns_structured_result(mock_llm):
         },
     })
 
-    assert result["triage_result"] == {"severity": "high", "explanation": "looks like a schema break"}
+    assert result["triage_result"]["severity"] == "high"
+    assert result["triage_result"]["explanation"] == "looks like a schema break"
+    assert result["triage_result"]["source"] == "llm"
     mock_llm.invoke.assert_called_once()
