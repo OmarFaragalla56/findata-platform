@@ -15,6 +15,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Gemini as an alternative to Claude (PIPELINE_DOCTOR_LLM_PROVIDER=google).
+google = [
+    "langchain-google-genai>=2.0",
+]
+# Postgres and Parquet sources (tools/readers/). CSV needs neither.
+postgres = [
+    "psycopg[binary]>=3.1",
+]
+parquet = [
+    "pyarrow>=14",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-mock>=3.14.0",

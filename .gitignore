@@ -1,5 +1,7 @@
 # secrets
 .env
+# provider keys loaded only for manual runs, never by the stack
+.env.gemini
 
 # personal notes (kept out of the repo deliberately)
 notes.md

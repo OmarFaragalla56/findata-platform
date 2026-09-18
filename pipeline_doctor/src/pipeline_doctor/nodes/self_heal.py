@@ -61,15 +61,29 @@ def self_heal(state: PipelineDoctorState) -> dict:
         }
 
     llm = get_llm(SelfHealDecision)
-    decision: SelfHealDecision = llm.invoke(
-        build_self_heal_prompt(
-            step_path=state.get("step_path", "<no step>"),
-            error=state.get("error"),
-            traceback=state.get("traceback"),
-            retry_count=retry_count,
-            max_retries=max_retries,
+    try:
+        decision: SelfHealDecision = llm.invoke(
+            build_self_heal_prompt(
+                step_path=state.get("step_path", "<no step>"),
+                error=state.get("error"),
+                traceback=state.get("traceback"),
+                retry_count=retry_count,
+                max_retries=max_retries,
+            )
         )
-    )
+    except Exception as exc:
+        # Same reasoning as triage: an unavailable model shouldn't turn a
+        # recoverable step failure into an unrecoverable run. Fall back to the
+        # fixed policy; max_retries still caps it.
+        return {
+            "retry_count": retry_count,
+            "status": "running",
+            "self_heal_decision": {
+                "action": "retry",
+                "reasoning": f"LLM call failed ({type(exc).__name__}); using the fixed retry policy.",
+                "source": "rules_after_llm_error",
+            },
+        }
 
     status = "running" if decision.action == "retry" else "aborted"
     return {

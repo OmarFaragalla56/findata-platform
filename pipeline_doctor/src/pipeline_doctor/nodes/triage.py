@@ -109,7 +109,20 @@ def triage(state: PipelineDoctorState) -> dict:
         return {"triage_result": result}
 
     llm = get_llm(TriageResult)
-    llm_result: TriageResult = llm.invoke(
-        build_triage_prompt(step_path=run_key(state), drift_report=state["drift_report"])
-    )
+    try:
+        llm_result: TriageResult = llm.invoke(
+            build_triage_prompt(step_path=run_key(state), drift_report=state["drift_report"])
+        )
+    except Exception as exc:
+        # Having a key is not the same as the call working: a provider outage,
+        # a 503 "high demand", a rate limit or an expired key all surface here.
+        # Found live - a Gemini 503 crashed the whole run with exit 1, which is
+        # exactly the unattended failure the rules fallback exists to prevent.
+        # The drift itself is still real and still needs routing, so degrade
+        # to the rules rather than lose the finding.
+        result = rule_based_triage(state).model_dump()
+        result["explanation"] += f" (rule-based: LLM call failed with {type(exc).__name__})"
+        result["source"] = "rules_after_llm_error"
+        result["llm_error"] = str(exc)[:500]
+        return {"triage_result": result}
     return {"triage_result": {**llm_result.model_dump(), "source": "llm"}}

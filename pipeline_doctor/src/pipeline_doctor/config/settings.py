@@ -9,6 +9,14 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+# Default model per provider, used when PIPELINE_DOCTOR_LLM_MODEL isn't set.
+# Keyed by provider so switching providers doesn't leave a Claude model name
+# pointed at Gemini's API (or the reverse).
+DEFAULT_MODELS = {
+    "anthropic": "claude-opus-5",
+    "google": "gemini-2.5-flash",
+}
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -18,7 +26,8 @@ class Settings:
     which layers environment variables on top of these.
     """
 
-    llm_model: str = "claude-opus-5"
+    llm_provider: str = "anthropic"          # "anthropic" | "google"
+    llm_model: str = DEFAULT_MODELS["anthropic"]
     max_retries: int = 3
     row_count_drift_pct: float = 0.20
     null_rate_drift_pct: float = 0.10
@@ -69,8 +78,10 @@ def get_settings() -> Settings:
     """
     load_dotenv()
     d = Settings()
+    provider = os.getenv("PIPELINE_DOCTOR_LLM_PROVIDER", d.llm_provider).lower()
     return Settings(
-        llm_model=os.getenv("PIPELINE_DOCTOR_LLM_MODEL", d.llm_model),
+        llm_provider=provider,
+        llm_model=os.getenv("PIPELINE_DOCTOR_LLM_MODEL", DEFAULT_MODELS.get(provider, d.llm_model)),
         max_retries=int(os.getenv("PIPELINE_DOCTOR_MAX_RETRIES", str(d.max_retries))),
         row_count_drift_pct=float(
             os.getenv("PIPELINE_DOCTOR_ROW_COUNT_DRIFT_PCT", str(d.row_count_drift_pct))
