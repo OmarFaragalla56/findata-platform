@@ -3,8 +3,8 @@
 Written 2026-09-06, after running Pipeline Doctor against the live findata
 pipeline as a one-off experiment (see "What the experiment established" below).
 
-**Living location:** the combined repo root, moved here during Phase 0
-(2026-09-17).
+**Living location:** `docs/plan.md` in the combined repo, moved here during
+Phase 0 (2026-09-17).
 
 ---
 
@@ -80,7 +80,7 @@ Facts to build on, not assumptions:
 created at `findata-platform/` (copied, originals untouched), `bigdata/` nested
 under `pipeline/`, `airflow/` + `docker-compose.yml` at the root, every compose
 path rewritten, `.env` merged + `.env.example` created, `.gitignore` merged
-(now covers `.user.yml`), `plan.md`/`notes.md`/`exp.md` at the root, `git init`.
+(now covers `.user.yml`), `plan.md`/`exp.md` under `docs/`, `notes.md` at the root, `git init`.
 Remaining: bring the stack up and confirm the volumes reattached, DAG green,
 then the first commit.
 

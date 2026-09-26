@@ -28,7 +28,7 @@ What it does today:
 - Exits **0** clean / **2** awaiting human review / **1** error, so a scheduler
   can tell the three apart.
 
-See `docs/architecture.md` for the graph and `../plan.md` for the roadmap this
+See `docs/architecture.md` for the graph and `../docs/plan.md` for the roadmap this
 followed.
 
 ## Project layout

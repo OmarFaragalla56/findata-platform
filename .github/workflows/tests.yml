@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  pipeline-doctor:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pipeline_doctor
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # postgres/parquet extras are needed by the reader tests; google by the
+      # provider test (it skips if the package is absent, and a skipped test
+      # proves nothing). No API keys: every LLM client is stubbed, so the suite
+      # must never make a network call.
+      - name: Install
+        run: pip install -e ".[dev,postgres,parquet,google]"
+
+      - name: Test
+        run: pytest -q

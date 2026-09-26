@@ -55,10 +55,7 @@ split**:
 There's no real bank, so a Python **producer** invents realistic transactions,
 and **Kafka** holds them between the producer and Spark.
 
-### How the CV bullets map to the code
-
-| CV claim | Where it lives |
-|---|---|
+---|---|
 | "real-time data ingestion pipeline using Kafka to stream simulated financial transactions" | `pipeline/producer/produce_transactions.py` → Kafka topic `transactions` |
 | "Apache Spark for stateful windowed aggregations, calculating rolling metrics like velocity and average transaction size" | `pipeline/spark_jobs/streaming_job.py`, query 2: `groupBy(window(...), account_id)` → `txn_count`, `avg_amount`, `velocity_per_min` |
 | "warehouse transformation models using dbt to clean, test, and structure raw data for BI consumption" | `pipeline/dbt_project/`: staging views → mart tables, 19 tests |
