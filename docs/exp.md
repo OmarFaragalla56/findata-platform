@@ -557,7 +557,7 @@ share one `target/` folder; see Known issues).
 
 ```yaml
 kafka:
-  image: apache/kafka:3.7.0
+  build: ./kafka          # thin image over apache/kafka:3.7.0, for volume ownership
   container_name: findata-kafka
   restart: unless-stopped
   ports:

@@ -115,7 +115,7 @@ flowchart TD
 ## Quickstart
 
 ```bash
-cp .env.example .env     # then generate a Fernet key, see the comment in the file
+cp .env.example .env     # one file for every service; generate a Fernet key (see the comment inside)
 docker compose up -d     # kafka, postgres, adminer, producer, streaming-job, airflow
 ```
 
@@ -207,6 +207,14 @@ interesting part:
   parallelize across at this volume.
 - The producer timestamps every event "now", so no event is ever late and the
   2-minute watermark is never actually exercised.
+- `amount` is parsed as a float in Spark and only lands as exact cents because
+  Postgres rounds on insert; real financial code would use `DecimalType`.
+- A message that parses but violates a column limit (an oversized `amount`,
+  say) would fail the merge, and Spark would replay that batch forever. The
+  producer cannot emit one, so it is unreachable today; the fix is a
+  dead-letter table rather than a filter per constraint.
+- The streaming half has no Python unit tests — its behaviour is verified by
+  running the stack. Pipeline Doctor carries the test suite (93 tests).
 
 ## Docs
 

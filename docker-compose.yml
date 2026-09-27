@@ -86,7 +86,9 @@ x-airflow-common: &airflow-common
 
 services:
   kafka:
-    image: apache/kafka:3.7.0
+    # Built, not pulled: the image needs /tmp/kafka-logs to exist with the right
+    # owner so an empty named volume inherits it (see kafka/Dockerfile).
+    build: ./kafka
     container_name: findata-kafka
     restart: unless-stopped
     ports:

@@ -39,7 +39,6 @@ DBT_PROJECT_DIR = "/opt/airflow/dbt_project"
 # Pipeline Doctor lives in a third venv for the same dependency-isolation
 # reason dbt has its own (see airflow/Dockerfile), so it is also called by path.
 PD_BIN = "/home/airflow/pd_venv/bin/pipeline-doctor"
-PD_TABLE = "analytics_marts.fct_transactions"
 # Explicit and stable: the baseline is filed under this name, so changing it
 # silently starts comparing against nothing.
 PD_NAME = "findata_fct_transactions"
@@ -47,6 +46,18 @@ PD_NAME = "findata_fct_transactions"
 # column, and the interesting question is "does recent data look normal", not
 # "has the cumulative total grown" (it always has).
 PD_ROW_LIMIT = 5000
+# ORDER BY is not cosmetic here. `limit N` with no ordering lets Postgres return
+# whichever rows it likes, so each run profiles a *different* arbitrary slice and
+# drift detection compares two unrelated samples - observed live as a phantom
+# account_id distribution shift that vanished once the query was ordered.
+# Newest-first also makes this "does recent data look normal", which is the
+# question worth asking of a mart that only ever grows.
+PD_QUERY = (
+    "select transaction_id, account_id, event_time, event_date, amount, "
+    "merchant, category, location, card_present, is_large_transaction "
+    "from analytics_marts.fct_transactions "
+    f"order by event_time desc limit {PD_ROW_LIMIT}"
+)
 
 with DAG(
     dag_id="findata_dbt_build",
@@ -84,10 +95,7 @@ with DAG(
     # using the thread_id printed in this task's log.
     pipeline_doctor_check = BashOperator(
         task_id="pipeline_doctor_check",
-        bash_command=(
-            f"{PD_BIN} check --source postgres "
-            f"--table {PD_TABLE} --name {PD_NAME} --limit {PD_ROW_LIMIT}"
-        ),
+        bash_command=f'{PD_BIN} check --source postgres --name {PD_NAME} --query "{PD_QUERY}"',
     )
 
     dbt_source_freshness >> dbt_build >> pipeline_doctor_check

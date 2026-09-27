@@ -10,7 +10,7 @@ run can be interrupted and resumed later with `Command(resume=...)`.
 ## Status
 
 Feature-complete for its original scope and wired into the findata pipeline as
-a scheduled quality gate. 84 tests pass (`pytest`).
+a scheduled quality gate. 93 tests pass (`pytest`).
 
 What it does today:
 
@@ -49,7 +49,7 @@ followed.
 ## Setup (once dependencies land in later milestones)
 
 ```bash
-cp .env.example .env   # fill in ANTHROPIC_API_KEY etc.
+cp .env.example .env   # standalone use only; inside this repo the root ../.env covers it
 pip install -e ".[dev]"
 ```
 

@@ -21,7 +21,7 @@ Phase 0 (2026-09-17).
 | 6 — operability | done | run reports, step timeout, README, `docs/architecture.md` |
 | Option C wiring | done | `dbt_source_freshness >> dbt_build >> pipeline_doctor_check`, all green |
 
-84 tests pass. The sections below are the original plan, kept as the record of
+93 tests pass. The sections below are the original plan, kept as the record of
 what was decided and why.
 
 ---
@@ -132,7 +132,7 @@ project name, which **orphans those volumes**. Either set `name:` explicitly in
 unchanged) or accept a clean rebuild. Verify before moving, not after.
 
 **Done when:** `docker compose up -d` from the new root brings up the full
-stack, `pytest` passes PD's 35 tests from the new location, and the Airflow DAG
+stack, `pytest` passes PD's tests from the new location, and the Airflow DAG
 still runs green.
 
 ---
@@ -265,7 +265,7 @@ DAG rather than degrade it.
 
 ## Phase 6 — Operability
 
-Smaller items, mostly from `problems.md`:
+Smaller items, mostly from the since-deleted `problems.md`:
 
 - **`nodes/finalize.py` is a literal no-op** (`return {}`). Make it write a run
   report — what ran, what drifted, what was decided.
@@ -276,7 +276,7 @@ Smaller items, mostly from `problems.md`:
   in its own serialization format. A simple runs table would make this
   reportable.
 - **Stale README** — the "Status" section says M0/scaffolding; M1–M7 are
-  implemented and 35 tests pass.
+  implemented and the tests pass.
 - **Empty `docs/`** — README promises architecture notes and a generated
   mermaid graph diagram that don't exist.
 
